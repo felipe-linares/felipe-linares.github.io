@@ -1,0 +1,165 @@
+---
+title: "Final Project"
+author: "Felipe Linares"
+date: "May 21, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+knitr::opts_chunk$set(echo = TRUE)
+
+data <- read.csv("data/housing_data.csv")
+```
+
+
+Motivation: With so much available open data about housing prices and the attributes of each house, we can make a model that accurately predicts housing prices based on the makeup of the house. A model like this can make it easier for people/realtors selling homes to appropriately get an estimate as to how much the house should be worth based on a previous data. Of course, prices change and housing trends fluctuate over the years, so we'll have to account for the year sold, amongst the other attributes, as part of our model in order to accurately predict the sale price based on the year.
+
+We start out with our dataset of 80 different attributes, how can we make this easier to work with for our model? We need to be able to treat categorical variables as numeric, which we can do by encoding values of a variable as different attributes.
+
+In the following we convert easily encoded categorical values to numerical.
+```{r EDA}
+data <- data %>%
+  mutate(street_pave = ifelse(Street == "Pave", 1, 0)) %>%
+  mutate(lot_regular = ifelse(LotShape == "Reg", 1, 0)) %>%
+  mutate(lot_irregular_1 = ifelse(LotShape == "IR1", 1, 0)) %>%
+  mutate(lot_irregular_2 = ifelse(LotShape == "IR2", 1, 0)) %>%
+  mutate(lot_irregular_3 = ifelse(LotShape == "IR3", 1, 0)) %>%
+  mutate(contour_lvl = ifelse(LandContour == "Lvl", 1, 0)) %>%
+  mutate(contour_bnk = ifelse(LandContour == "Bnk", 1, 0)) %>%
+  mutate(lot_inside = ifelse(LotConfig == "Inside", 1, 0)) %>%
+  mutate(lot_corner = ifelse(LotConfig == "Corner", 1, 0)) %>%
+  mutate(lot_culdesac = ifelse(LotConfig == "CulDSac", 1, 0)) %>%
+  mutate(fence_mnprv = ifelse(Fence == "MnPrv", 1, 0)) %>%
+  mutate(fence_gdprv = ifelse(Fence == "GdPrv", 1, 0)) %>%
+  mutate(style_1story = ifelse(HouseStyle == "1Story", 1 ,0)) %>%
+  mutate(style_2story = ifelse(HouseStyle == "2Story", 1 ,0)) %>%
+  mutate(style_sfoyer = ifelse(HouseStyle == "SFoyer", 1 ,0)) %>%
+  mutate(style_1.5fin = ifelse(HouseStyle == "1.5Fin", 1 ,0)) %>%
+  mutate(style_slvl = ifelse(HouseStyle == "SLvl", 1 ,0)) 
+```
+Some variables, such as Utilities, would be useless to include in our model since it is the same for all entities, so there is no need to encode them.
+
+Because we're dealing with linear regression, we need to make sure we do not have any collinear variables, as this could make our model invalid. We can test this by regressing variables into each other. Regressing variables into each other shows if they have any sort of positive or negative correlation. If the plotted points have randomness, they are said to be independent and we can use both attributes in our model. If the attributes are not independent, we can only use one of them. Some of the first ones that come up as potentially being colinear are those that have to do with area of the basement and ground level. Lets compare these and see.
+```{r collinearity_test}
+ggplot(aes(y=TotalBsmtSF,x=BsmtFinSF1), data=data) +
+  geom_point() +
+  geom_smooth(method=lm) +
+  labs(title="TotalBsmtSf to BsmtFinSF1",
+     x="Basement Finished Surface Area 1",
+     y="Total Basement Surface Area")
+
+ggplot(aes(y=TotalBsmtSF,x=BsmtUnfSF), data=data) +
+  geom_point() +
+  geom_smooth(method=lm) +
+  labs(title="TotalBsmtSf to BsmtUnfSF",
+     x="Basement Un-Finished Surface Area",
+     y="Total Basement Surface Area")
+
+ggplot(aes(y=GrLivArea,x=X1stFlrSF), data=data) +
+  geom_point() +
+  geom_smooth(method=lm) +
+  labs(title="Ground Living Area to 1st Floor Surface Area",
+     x="X1stFlrSF",
+     y="GrLivArea")
+```
+It is evident that these values are collinear and this is due to the fact that the total basement area is made up in part by the finished surface area and the ground living area is made up in part by the  1st floor surface area. So what other information can we get from these attributes? From the basement area, we can see what percentage of it is unfinished, and use that in our model as a finished basement can add more value to a home, and we'll check again to see if there is any collinearity between this percentage and the total basement surface area.
+
+```{r finished_bsmt_perc}
+data <- data %>%
+  mutate(perc_bsmt_finished = ifelse(TotalBsmtSF > 0, (TotalBsmtSF - BsmtUnfSF) / TotalBsmtSF, 1))
+
+ggplot(aes(x=TotalBsmtSF,y=perc_bsmt_finished), data=data) +
+  geom_point() +
+  geom_smooth(method=lm) +
+  labs(title="Basement Surface Area Finished",
+     y="Percentage Finished",
+     x="Total Basement Surface Area")
+```
+We can see that the data is not collinear as the total basement surface area completed does not affect the changes in the percentage of the basement finished, so we can add both of these variables to our model without invalidating it.
+
+We should also standardize any continuous features we will have in our model: lot area, total basement surface area, masonry veneer area, ground living area, and the percentage of the basement finished.
+```{r standardization}
+data <- data %>%
+  mutate(scaled_bsmt_sf = (TotalBsmtSF - mean(TotalBsmtSF)) / sd(TotalBsmtSF)) %>%
+  mutate(scaled_lot_area = (LotArea - mean(LotArea)) / sd(LotArea)) %>%
+  mutate(scaled_msn_vnr_area = (MasVnrArea - mean(MasVnrArea)) / sd(MasVnrArea)) %>%
+  mutate(scaled_gr_liv_area = (GrLivArea - mean(GrLivArea)) / sd(GrLivArea)) %>%
+  mutate(scaled_perc_bsmt_finished = (perc_bsmt_finished - mean(perc_bsmt_finished)) / sd(perc_bsmt_finished))
+```
+
+Sometimes numerical attributes can be better treated as discrete, like in the case of the Overall Condition and Overall Quality of the homes that goes from 1-10. To visualize this, we can plot bar graphs for the prices at different qualities/conditions.
+```{r visualize_cuts}
+data %>%
+  group_by(OverallCond) %>%
+  summarize(price = mean(SalePrice)) %>%
+  ggplot(aes(y=price, x=OverallCond))+
+  geom_bar(stat = "identity")
+
+data %>%
+  group_by(OverallQual) %>%
+  summarize(price = mean(SalePrice)) %>%
+  ggplot(aes(y=price, x=OverallQual))+
+  geom_bar(stat = "identity")
+```
+From these graphs we can see that the overall condition does not really follow a pattern in regards to the price, so it is important to discretize these values. Overall Quality does seem to follow a natural trend, where overall quality causes an increase in price, but the values themselves are discrete, so we will discretize them anyway.
+
+Many of the numerical attributes we have are discrete, as seen above, and we need to make them discrete in order for the model to not interpret them as continuous. This process is often called binning when cutting up a seemingly continuous variable into "bins" of variables. Examples of this are the quality and condition of the home being sold.
+
+To do this we will create new attributes based on each discrete condition and assign 1 to it if it matches the condition we are looking for or 0 otherwise. Because we have multiple values, we ignore the last condition of "10" for quality and it becomes the base in our model. Basically, this means that if all of the other ones are 0, it will be interpretted as a "10," and if there is a 1 in any of the other categories, it is simply as a difference from the "10" quality. In the case of the condition, it only goes up to 9 so we omit this value instead.
+```{r continuous_to_discrete}
+data <- data %>%
+  mutate(cond_1 = ifelse(OverallCond == 1, 1, 0)) %>%
+  mutate(cond_2 = ifelse(OverallCond == 2, 1, 0)) %>%
+  mutate(cond_3 = ifelse(OverallCond == 3, 1, 0)) %>%
+  mutate(cond_4 = ifelse(OverallCond == 4, 1, 0)) %>%
+  mutate(cond_5 = ifelse(OverallCond == 5, 1, 0)) %>%
+  mutate(cond_6 = ifelse(OverallCond == 6, 1, 0)) %>%
+  mutate(cond_7 = ifelse(OverallCond == 7, 1, 0)) %>%
+  mutate(cond_8 = ifelse(OverallCond == 8, 1, 0)) %>%
+  mutate(qual_1 = ifelse(OverallQual == 1, 1 ,0)) %>%
+  mutate(qual_2 = ifelse(OverallQual == 2, 1 ,0)) %>%
+  mutate(qual_3 = ifelse(OverallQual == 3, 1 ,0)) %>%
+  mutate(qual_4 = ifelse(OverallQual == 4, 1 ,0)) %>%
+  mutate(qual_5 = ifelse(OverallQual == 5, 1 ,0)) %>%
+  mutate(qual_6 = ifelse(OverallQual == 6, 1 ,0)) %>%
+  mutate(qual_7 = ifelse(OverallQual == 7, 1 ,0)) %>%
+  mutate(qual_8 = ifelse(OverallQual == 8, 1 ,0)) %>%
+  mutate(qual_9 = ifelse(OverallQual == 9, 1 ,0))
+```
+
+With these encoded categorical attributes, standardized continuous attributes and discretized numerical attributes, we can build our model to predict housing sale prices.
+We build a linear model where the Y is our sale price and the X values are the newly curated attributes we have created based on discrete, categorical, and standardized values.
+```{r regression}
+data_stats <- lm(SalePrice~lot_regular+lot_irregular_1+lot_irregular_2+lot_irregular_3+contour_lvl+contour_bnk+lot_inside+lot_corner+lot_culdesac+fence_mnprv+fence_gdprv+style_1story+style_2story+style_sfoyer+style_1.5fin+style_slvl+YearBuilt+YearRemodAdd+scaled_lot_area+qual_1+qual_2+qual_3+qual_4+qual_5+qual_6+qual_7+qual_8+qual_9+cond_1+cond_2+cond_3+cond_4+cond_5+cond_6+cond_7+cond_8+scaled_bsmt_sf+scaled_gr_liv_area+FullBath+HalfBath+TotRmsAbvGrd+YrSold+scaled_perc_bsmt_finished, data=data)
+
+broom::tidy(data_stats)
+anova(data_stats)
+```
+From the P-Values of the linear model we have created, we can see for which predictors we can reject the null hypothesis. Predictors with a p-value below 0.05 are said to reject the null hypothesis of no relationship because we are more than 95% confident of this predictor. In this case, we can see that many of the categorical attributes come close to being below 0.05 but most do not, so we are not able to reject the null hypothesis for those predictors. However, for many of the numerical values such as lot area, and ground living area, the p-value is well below 0.05 and enough to reject the null.
+
+The residual sum of squares is the sum of the squares of the differences from predicted values to actual values. This helps us give an estimate for how accurate the model is since it shows how close our predictions are to the actual values.
+
+When creating a linear model based off of our encoded categorical attributes as well as some important numerical and discretized attributes, we can see our residual sum of squares is 8.8599e+10, but this number by itself does not mean anything. How does it compare to, for example, just assuming the average for each case?
+```{r average_sum_squares}
+data_test <- data %>%
+  mutate(sales_mean=mean(SalePrice))
+data_test %>% 
+  summarize(output=sum((SalePrice-sales_mean)^2))
+```
+
+From here we can see that the sum of squares when assuming the average for each entity is much higher than the residual given from our linear model, meaning our model more accurately fits the data than at least a simple average.
+
+Let us visualize our residuals to see how they are distributed. Residuals are the difference from the actual value to the predicted value, this allows us to see how accurate our model was and if a linear model is the correct way to represent our dataset. If the residuals are centered around zero with an even spread, we know that the model accurately represents the data set.
+```{r residuals}
+data_stats %>%
+  broom::augment() %>%
+  ggplot(aes(y=.resid,x=.fitted)) + 
+  geom_point() +
+  geom_smooth(method=lm) +
+  labs(title="Residuals to Fitted",
+       x="Fitted",
+       y="Residuals")
+```
+Because the residuals are centered around zero and has an even spread, we can see that a linear fit is an accurate representation of our data set and the model fits the data we are trying to base it on. If the spread changed across values, then it would mean that the model more accurately predicts for some inputs than others, which is not what we want. We want a model that will accurately predict the Sale price for all inputs.
+
