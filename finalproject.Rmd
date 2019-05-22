@@ -17,7 +17,9 @@ Motivation: With so much available open data about housing prices and the attrib
 
 We start out with our dataset of 80 different attributes, how can we make this easier to work with for our model? We need to be able to treat categorical variables as numeric, which we can do by encoding values of a variable as different attributes.
 
-In the following we convert easily encoded categorical values to numerical.
+A categorical variable is one that has comes from a set of values rather than continuous like say a range of numbers. You can find more information about continuous, discrete, and continuous variables here: https://support.minitab.com/en-us/minitab-express/1/help-and-how-to/modeling-statistics/regression/supporting-topics/basics/what-are-categorical-discrete-and-continuous-variables/
+
+In the following we convert easily encoded categorical values to numerical by creating new attributes that describe the categorical values and write 1 for when the value matches our new discrete columns.
 ```{r EDA}
 data <- data %>%
   mutate(street_pave = ifelse(Street == "Pave", 1, 0)) %>%
@@ -40,7 +42,11 @@ data <- data %>%
 ```
 Some variables, such as Utilities, would be useless to include in our model since it is the same for all entities, so there is no need to encode them.
 
-Because we're dealing with linear regression, we need to make sure we do not have any collinear variables, as this could make our model invalid. We can test this by regressing variables into each other. Regressing variables into each other shows if they have any sort of positive or negative correlation. If the plotted points have randomness, they are said to be independent and we can use both attributes in our model. If the attributes are not independent, we can only use one of them. Some of the first ones that come up as potentially being colinear are those that have to do with area of the basement and ground level. Lets compare these and see.
+Because we're dealing with linear regression, we need to make sure we do not have any collinear variables, as this could make our model invalid. It makes the model invalid because the idea behind features in a linear model is that they're independent and each have their own effect on the final result based on their weights, but if two features are collinear, then they are related, and it ruins the independence we are looking for in a linear model. We can test this by regressing variables into each other. Regressing variables into each other shows if they have any sort of positive or negative correlation. If the plotted points have randomness, they are said to be independent and we can use both attributes in our model. If the attributes are not independent, we can only use one of them. 
+
+For more information on the basics behind linear regression and collinearity, visit here: http://www.hcbravo.org/IntroDataSci/bookdown-notes/linear-regression.html#multiple-linear-regression
+
+Some of the first ones that come up as potentially being colinear are those that have to do with area of the basement and ground level. Lets compare these and see.
 ```{r collinearity_test}
 ggplot(aes(y=TotalBsmtSF,x=BsmtFinSF1), data=data) +
   geom_point() +
@@ -63,11 +69,17 @@ ggplot(aes(y=GrLivArea,x=X1stFlrSF), data=data) +
      x="X1stFlrSF",
      y="GrLivArea")
 ```
-It is evident that these values are collinear and this is due to the fact that the total basement area is made up in part by the finished surface area and the ground living area is made up in part by the  1st floor surface area. So what other information can we get from these attributes? From the basement area, we can see what percentage of it is unfinished, and use that in our model as a finished basement can add more value to a home, and we'll check again to see if there is any collinearity between this percentage and the total basement surface area.
 
+It is evident that these values are collinear and this is due to the fact that the total basement area is made up in part by the finished surface area and the ground living area is made up in part by the 1st floor surface area. 
+
+So what other information can we get from these attributes, if we can't use more than one from each relationship? 
+From the basement area, we can see what percentage of it is unfinished, and use that in our model as a finished basement can add more value to a home, and we'll check again to see if there is any collinearity between this percentage and the total basement surface area.
+
+We can add a percentage of basement finished attribute to our data set and use that in our model from the given data. However, we must be careful because some homes don't have basements, so the TotalBsmtSF will be 0 and we'll get a divide by zero error ending in NaN for the percentage of the basement finished. To combat this, we can go through and replace the NaNs with the average of the rest of the data set, so that these homes don't have a postive or negative advantage for having a fully finished/unfinished basement.
 ```{r finished_bsmt_perc}
 data <- data %>%
-  mutate(perc_bsmt_finished = ifelse(TotalBsmtSF > 0, (TotalBsmtSF - BsmtUnfSF) / TotalBsmtSF, 1))
+  mutate(perc_bsmt_finished = (TotalBsmtSF - BsmtUnfSF) / TotalBsmtSF) %>%
+  mutate(perc_bsmt_finished = ifelse(is.nan(perc_bsmt_finished), mean(perc_bsmt_finished, na.rm=TRUE), perc_bsmt_finished))
 
 ggplot(aes(x=TotalBsmtSF,y=perc_bsmt_finished), data=data) +
   geom_point() +
@@ -76,19 +88,21 @@ ggplot(aes(x=TotalBsmtSF,y=perc_bsmt_finished), data=data) +
      y="Percentage Finished",
      x="Total Basement Surface Area")
 ```
-We can see that the data is not collinear as the total basement surface area completed does not affect the changes in the percentage of the basement finished, so we can add both of these variables to our model without invalidating it.
 
-We should also standardize any continuous features we will have in our model: lot area, total basement surface area, masonry veneer area, ground living area, and the percentage of the basement finished.
+We can see that the data is not collinear as the total basement surface area completed does not affect the changes in the percentage of the basement finished. The percentage of the basement is random compared to the total basement surface area, so we can add both of these variables to our model without invalidating it.
+
+We should also standardize any continuous features we will have in our model: lot area, total basement surface area, masonry veneer area, ground living area, and the percentage of the basement finished. This creates a unitless scale that basically transforms the values from whatever units they are in and turns them into standard units based on a normal distribution. For more information on the normal distribution and how standard units work, visit here: https://www.britannica.com/topic/normal-distribution
 ```{r standardization}
 data <- data %>%
   mutate(scaled_bsmt_sf = (TotalBsmtSF - mean(TotalBsmtSF)) / sd(TotalBsmtSF)) %>%
   mutate(scaled_lot_area = (LotArea - mean(LotArea)) / sd(LotArea)) %>%
   mutate(scaled_msn_vnr_area = (MasVnrArea - mean(MasVnrArea)) / sd(MasVnrArea)) %>%
   mutate(scaled_gr_liv_area = (GrLivArea - mean(GrLivArea)) / sd(GrLivArea)) %>%
-  mutate(scaled_perc_bsmt_finished = (perc_bsmt_finished - mean(perc_bsmt_finished)) / sd(perc_bsmt_finished))
+  mutate(scaled_perc_bsmt_finished = (perc_bsmt_finished - mean(perc_bsmt_finished)) / sd(perc_bsmt_finished)) %>%
+  mutate(scaled_grg_area = (GarageArea - mean(GarageArea)) / sd(GarageArea))
 ```
 
-Sometimes numerical attributes can be better treated as discrete, like in the case of the Overall Condition and Overall Quality of the homes that goes from 1-10. To visualize this, we can plot bar graphs for the prices at different qualities/conditions.
+Sometimes numerical attributes can be better treated as discrete, like in the case of the Overall Condition and Overall Quality of the homes that goes from 1-10, since the discrete values may not have a linear relationship so a discrete representation of these attributes may be more appropriate. To visualize this, we can plot bar graphs based on groupings by overall condition/overall quality for the prices at different qualities/conditions.
 ```{r visualize_cuts}
 data %>%
   group_by(OverallCond) %>%
@@ -102,6 +116,7 @@ data %>%
   ggplot(aes(y=price, x=OverallQual))+
   geom_bar(stat = "identity")
 ```
+
 From these graphs we can see that the overall condition does not really follow a pattern in regards to the price, so it is important to discretize these values. Overall Quality does seem to follow a natural trend, where overall quality causes an increase in price, but the values themselves are discrete, so we will discretize them anyway.
 
 Many of the numerical attributes we have are discrete, as seen above, and we need to make them discrete in order for the model to not interpret them as continuous. This process is often called binning when cutting up a seemingly continuous variable into "bins" of variables. Examples of this are the quality and condition of the home being sold.
@@ -131,7 +146,7 @@ data <- data %>%
 With these encoded categorical attributes, standardized continuous attributes and discretized numerical attributes, we can build our model to predict housing sale prices.
 We build a linear model where the Y is our sale price and the X values are the newly curated attributes we have created based on discrete, categorical, and standardized values.
 ```{r regression}
-data_stats <- lm(SalePrice~lot_regular+lot_irregular_1+lot_irregular_2+lot_irregular_3+contour_lvl+contour_bnk+lot_inside+lot_corner+lot_culdesac+fence_mnprv+fence_gdprv+style_1story+style_2story+style_sfoyer+style_1.5fin+style_slvl+YearBuilt+YearRemodAdd+scaled_lot_area+qual_1+qual_2+qual_3+qual_4+qual_5+qual_6+qual_7+qual_8+qual_9+cond_1+cond_2+cond_3+cond_4+cond_5+cond_6+cond_7+cond_8+scaled_bsmt_sf+scaled_gr_liv_area+FullBath+HalfBath+TotRmsAbvGrd+YrSold+scaled_perc_bsmt_finished, data=data)
+data_stats <- lm(SalePrice~lot_regular+lot_irregular_1+lot_irregular_2+lot_irregular_3+contour_lvl+contour_bnk+lot_inside+lot_corner+lot_culdesac+fence_mnprv+fence_gdprv+style_1story+style_2story+style_sfoyer+style_1.5fin+style_slvl+YearBuilt*YrSold*YearRemodAdd+scaled_lot_area+qual_1+qual_2+qual_3+qual_4+qual_5+qual_6+qual_7+qual_8+qual_9+cond_1+cond_2+cond_3+cond_4+cond_5+cond_6+cond_7+cond_8+scaled_bsmt_sf+scaled_gr_liv_area+FullBath+HalfBath+TotRmsAbvGrd+scaled_perc_bsmt_finished+scaled_grg_area, data=data)
 
 broom::tidy(data_stats)
 anova(data_stats)
@@ -163,3 +178,15 @@ data_stats %>%
 ```
 Because the residuals are centered around zero and has an even spread, we can see that a linear fit is an accurate representation of our data set and the model fits the data we are trying to base it on. If the spread changed across values, then it would mean that the model more accurately predicts for some inputs than others, which is not what we want. We want a model that will accurately predict the Sale price for all inputs.
 
+We can also check the accuracy of our model by years and if the year makes a difference in the residuals. To do this we can make a violin plot comparinig residuals to years.
+```{r residuals_to_years}
+data_stats %>%
+  broom::augment() %>%
+  ggplot(aes(y=.resid,x=factor(YrSold))) + 
+  geom_violin() + 
+  labs(title="Residual to Year Violin Plot",
+       x="Year",
+       y="Residual")
+```
+
+This violin plot shows that the majority of residuals are around 0 for all the years. Meaning for all years, we have relatively consistent accuracy and the linear models fits the data set. There are slight variations from year to year where some have more or less residuals on different years. For this, more data exploration is required, as many factors can affect this since not only do home features play into the prices, but economic factors do as well, which changes over the years, and we do not have economic factors in this dataset. However, this would be an interesting thing to take into account for future exploration.
